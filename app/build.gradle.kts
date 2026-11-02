@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "de.senad.iptv"
-    compileSdk = 36
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "de.senad.iptv"
