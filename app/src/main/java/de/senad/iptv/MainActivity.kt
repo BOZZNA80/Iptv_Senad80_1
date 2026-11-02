@@ -642,7 +642,7 @@ class MainActivity : Activity() {
         }
         if (channel.streamId.isBlank()) {
             android.app.AlertDialog.Builder(this)
-                .setTitle("EPG – \${channel.name}")
+                .setTitle("EPG – ${channel.name}")
                 .setMessage("Für diesen M3U-Sender ist noch keine XMLTV-EPG-Quelle eingerichtet. Bei Xtream-Anbietern kann das Programm direkt geladen werden.")
                 .setPositiveButton("OK", null).show()
             return
@@ -655,14 +655,14 @@ class MainActivity : Activity() {
             return
         }
         val loading = android.app.AlertDialog.Builder(this)
-            .setTitle("EPG – \${channel.name}")
+            .setTitle("EPG – ${channel.name}")
             .setMessage("Programm wird geladen …")
             .setCancelable(false).create()
         loading.show()
         io.execute {
             try {
                 val password = decryptPassword(encrypted)
-                val address = "$server/player_api.php?username=\${enc(username)}&password=\${enc(password)}&action=get_short_epg&stream_id=\${enc(channel.streamId)}&limit=10"
+                val address = "$server/player_api.php?username=${enc(username)}&password=${enc(password)}&action=get_short_epg&stream_id=${enc(channel.streamId)}&limit=10"
                 val response = requestJson(address)
                 val listings = response.optJSONArray("epg_listings") ?: JSONArray()
                 val text = if (listings.length() == 0) {
@@ -677,14 +677,14 @@ class MainActivity : Activity() {
                         buildString {
                             append(if (start.isNotBlank()) "$start – $end" else "Sendezeit unbekannt")
                             append("\n$title")
-                            if (description.isNotBlank()) append("\n\${description.take(260)}")
+                            if (description.isNotBlank()) append("\n${description.take(260)}")
                         }
                     }.joinToString("\n\n──────────────\n\n")
                 }
                 runOnUiThread {
                     loading.dismiss()
                     android.app.AlertDialog.Builder(this)
-                        .setTitle("EPG – \${channel.name}")
+                        .setTitle("EPG – ${channel.name}")
                         .setMessage(text)
                         .setPositiveButton("Schließen", null)
                         .show()
@@ -692,7 +692,7 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 runOnUiThread {
                     loading.dismiss()
-                    showError("EPG konnte nicht geladen werden: \${e.message ?: "Unbekannter Fehler"}")
+                    showError("EPG konnte nicht geladen werden: ${e.message ?: "Unbekannter Fehler"}")
                 }
             }
         }
