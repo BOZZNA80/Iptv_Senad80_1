@@ -350,7 +350,7 @@ class MainActivity : Activity() {
                 setPadding(dp(6), 0, dp(6), 0)
             }
             val use = Button(this).apply {
-                text = "\${profile.optString("name")} · $username"
+                text = "${profile.optString("name")} · $username"
                 isAllCaps = false
                 textSize = 11f
                 setOnClickListener {
@@ -358,7 +358,7 @@ class MainActivity : Activity() {
                         val password = decryptPassword(profile.optString("encrypted_password"))
                         connectXtream(server, username, password)
                     } catch (e: Exception) {
-                        showError("Anbieter konnte nicht geladen werden: \${e.message}")
+                        showError("Anbieter konnte nicht geladen werden: ${e.message}")
                     }
                 }
             }
