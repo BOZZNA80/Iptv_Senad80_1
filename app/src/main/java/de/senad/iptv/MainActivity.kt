@@ -168,8 +168,8 @@ class MainActivity : Activity() {
     }
 
     private fun playStream(url: String) {
-        if (url.isBlank() || !(url.startsWith("https://") || url.startsWith("http://"))) {
-            Toast.makeText(this, "Bitte eine gültige Stream-Adresse eingeben.", Toast.LENGTH_LONG).show()
+        if (url.isBlank() || !url.startsWith("https://")) {
+            Toast.makeText(this, "Bitte eine gültige HTTPS-Stream-Adresse eingeben.", Toast.LENGTH_LONG).show()
             return
         }
         try {
