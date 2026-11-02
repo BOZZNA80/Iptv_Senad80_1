@@ -302,7 +302,7 @@ class MainActivity : Activity() {
     }
 
     private fun attribute(source: String, key: String): String {
-        val regex = Regex("""(?:^|\\s)$key="([^"]*)"""", RegexOption.IGNORE_CASE)
+        val regex = Regex("""(?:^|\s)$key="([^"]*)"""", RegexOption.IGNORE_CASE)
         return regex.find(source)?.groupValues?.getOrNull(1).orEmpty()
     }
 
