@@ -36,7 +36,8 @@ private data class TvChannel(
     val url: String,
     val group: String,
     val logo: String = "",
-    val tvgId: String = ""
+    val tvgId: String = "",
+    val streamId: String = ""
 )
 
 class MainActivity : Activity() {
@@ -52,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var groupButton: Button
     private lateinit var favoritesButton: Button
     private var showFavoritesOnly = false
+    private var selectedChannel: TvChannel? = null
     private val channels = mutableListOf<TvChannel>()
     private var groups: List<String> = listOf("Alle")
     private var selectedGroup = "Alle"
@@ -92,7 +94,7 @@ class MainActivity : Activity() {
         sidebar.addView(label("LIVE TV", 11f, muted, true), match(34))
         addNavButton(sidebar, "⌂  Übersicht", true)
         addNavButton(sidebar, "▣  Live-TV", false)
-        addNavButton(sidebar, "▤  EPG / Programm", false)
+        addNavButton(sidebar, "▤  EPG / Programm", false) { showEpgForSelectedChannel() }
         addNavButton(sidebar, "★  Favoriten", false)
         addNavButton(sidebar, "＋  Anbieter", false)
         addNavButton(sidebar, "⚙  Einstellungen", false)
@@ -229,6 +231,13 @@ class MainActivity : Activity() {
                     isAllCaps = false
                     setTextColor(Color.WHITE)
                     setBackgroundColor(panel)
+                    setOnClickListener {
+                        if (title == "EPG") showEpgForSelectedChannel()
+                        else if (title == "Favoriten") {
+                            showFavoritesOnly = !showFavoritesOnly
+                            renderChannels()
+                        }
+                    }
                 }
                 nav.addView(b, LinearLayout.LayoutParams(0, dp(48), 1f))
             }
@@ -239,7 +248,7 @@ class MainActivity : Activity() {
         renderChannels()
     }
 
-    private fun addNavButton(parent: LinearLayout, title: String, selected: Boolean) {
+    private fun addNavButton(parent: LinearLayout, title: String, selected: Boolean, action: (() -> Unit)? = null) {
         val button = Button(this).apply {
             text = title
             textSize = 13f
@@ -248,7 +257,10 @@ class MainActivity : Activity() {
             isFocusable = true
             setTextColor(if (selected) Color.WHITE else muted)
             setBackgroundColor(if (selected) accent else panel)
-            setOnClickListener { Toast.makeText(this@MainActivity, "$title – folgt in einem späteren Ausbauschritt", Toast.LENGTH_SHORT).show() }
+            setOnClickListener {
+                if (action != null) action()
+                else Toast.makeText(this@MainActivity, "$title – Bereich wird weiter ausgebaut", Toast.LENGTH_SHORT).show()
+            }
         }
         parent.addView(button, match(50).apply { bottomMargin = dp(4) })
     }
@@ -295,7 +307,7 @@ class MainActivity : Activity() {
                     val name = item.optString("name").ifBlank { "Sender $id" }
                     val logo = item.optString("stream_icon").takeUnless { it == "null" }.orEmpty()
                     val streamUrl = "$server/live/${encPath(username)}/${encPath(password)}/$id.ts"
-                    imported.add(TvChannel(name, streamUrl, group, logo, item.optString("epg_channel_id")))
+                    imported.add(TvChannel(name, streamUrl, group, logo, item.optString("epg_channel_id"), id))
                 }
                 if (imported.isEmpty()) throw IllegalStateException("Keine Live-TV-Sender vom Anbieter erhalten")
                 val encrypted = encryptPassword(password)
@@ -310,7 +322,10 @@ class MainActivity : Activity() {
                     }
                 }
                 if (!replaced) profiles.put(profile)
-                prefs.edit().putString("xtream_profiles", profiles.toString()).apply()
+                prefs.edit().putString("xtream_profiles", profiles.toString())
+                    .putString("active_xtream_server", server)
+                    .putString("active_xtream_user", username)
+                    .putString("active_xtream_password", encrypted).apply()
                 runOnUiThread {
                     channels.clear()
                     channels.addAll(imported)
@@ -586,6 +601,7 @@ class MainActivity : Activity() {
     }
 
     private fun playChannel(channel: TvChannel) {
+        selectedChannel = channel
         try {
             val exo = player ?: ExoPlayer.Builder(this).build().also {
                 player = it
@@ -598,6 +614,90 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             showError("Sender konnte nicht gestartet werden: ${e.message}")
         }
+    }
+
+
+    private fun showEpgForSelectedChannel() {
+        val channel = selectedChannel
+        if (channel == null) {
+            Toast.makeText(this, "Bitte zuerst einen Sender auswählen.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (channel.streamId.isBlank()) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("EPG – \${channel.name}")
+                .setMessage("Für diesen M3U-Sender ist noch keine XMLTV-EPG-Quelle eingerichtet. Bei Xtream-Anbietern kann das Programm direkt geladen werden.")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        val server = prefs.getString("active_xtream_server", null)
+        val username = prefs.getString("active_xtream_user", null)
+        val encrypted = prefs.getString("active_xtream_password", null)
+        if (server.isNullOrBlank() || username.isNullOrBlank() || encrypted.isNullOrBlank()) {
+            showError("Bitte zuerst einen Xtream-Anbieter verbinden.")
+            return
+        }
+        val loading = android.app.AlertDialog.Builder(this)
+            .setTitle("EPG – \${channel.name}")
+            .setMessage("Programm wird geladen …")
+            .setCancelable(false).create()
+        loading.show()
+        io.execute {
+            try {
+                val password = decryptPassword(encrypted)
+                val address = "$server/player_api.php?username=\${enc(username)}&password=\${enc(password)}&action=get_short_epg&stream_id=\${enc(channel.streamId)}&limit=10"
+                val response = requestJson(address)
+                val listings = response.optJSONArray("epg_listings") ?: JSONArray()
+                val text = if (listings.length() == 0) {
+                    "Der Anbieter hat für diesen Sender aktuell keine EPG-Daten geliefert."
+                } else {
+                    (0 until listings.length()).mapNotNull { i ->
+                        val item = listings.optJSONObject(i) ?: return@mapNotNull null
+                        val title = decodeEpg(item.optString("title")).ifBlank { "Sendung ohne Titel" }
+                        val start = formatEpgTime(item.optString("start"))
+                        val end = formatEpgTime(item.optString("end"))
+                        val description = decodeEpg(item.optString("description"))
+                        buildString {
+                            append(if (start.isNotBlank()) "$start – $end" else "Sendezeit unbekannt")
+                            append("\n$title")
+                            if (description.isNotBlank()) append("\n\${description.take(260)}")
+                        }
+                    }.joinToString("\n\n──────────────\n\n")
+                }
+                runOnUiThread {
+                    loading.dismiss()
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("EPG – \${channel.name}")
+                        .setMessage(text)
+                        .setPositiveButton("Schließen", null)
+                        .show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    loading.dismiss()
+                    showError("EPG konnte nicht geladen werden: \${e.message ?: "Unbekannter Fehler"}")
+                }
+            }
+        }
+    }
+
+    private fun decodeEpg(value: String): String {
+        if (value.isBlank() || value == "null") return ""
+        return runCatching {
+            String(Base64.decode(value, Base64.DEFAULT), Charsets.UTF_8)
+        }.getOrDefault(value)
+    }
+
+    private fun formatEpgTime(value: String): String {
+        if (value.isBlank() || value == "null") return ""
+        val formats = listOf("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm")
+        for (pattern in formats) {
+            val parsed = runCatching {
+                java.text.SimpleDateFormat(pattern, java.util.Locale.GERMANY).parse(value)
+            }.getOrNull()
+            if (parsed != null) return java.text.SimpleDateFormat("dd.MM. HH:mm", java.util.Locale.GERMANY).format(parsed)
+        }
+        return value
     }
 
     private fun showError(message: String) {
