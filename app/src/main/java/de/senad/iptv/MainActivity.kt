@@ -50,6 +50,8 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var channelList: LinearLayout
     private lateinit var groupButton: Button
+    private lateinit var favoritesButton: Button
+    private var showFavoritesOnly = false
     private val channels = mutableListOf<TvChannel>()
     private var groups: List<String> = listOf("Alle")
     private var selectedGroup = "Alle"
@@ -180,6 +182,16 @@ class MainActivity : Activity() {
             setOnClickListener { nextGroup() }
         }
         channelsPanel.addView(groupButton, match(46))
+        favoritesButton = Button(this).apply {
+            text = "★ Favoriten anzeigen"
+            isAllCaps = false
+            setOnClickListener {
+                showFavoritesOnly = !showFavoritesOnly
+                text = if (showFavoritesOnly) "Alle Sender anzeigen" else "★ Favoriten anzeigen"
+                renderChannels()
+            }
+        }
+        channelsPanel.addView(favoritesButton, match(42))
         val scroll = ScrollView(this).apply { isFillViewport = true }
         channelList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(channelList, ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -533,7 +545,11 @@ class MainActivity : Activity() {
     private fun renderChannels() {
         if (!::channelList.isInitialized) return
         channelList.removeAllViews()
-        val visible = channels.filter { selectedGroup == "Alle" || it.group == selectedGroup }
+        val favoriteUrls = prefs.getStringSet("favorite_urls", emptySet()) ?: emptySet()
+        val visible = channels.filter {
+            (selectedGroup == "Alle" || it.group == selectedGroup) &&
+                (!showFavoritesOnly || favoriteUrls.contains(it.url))
+        }
         if (visible.isEmpty()) {
             channelList.addView(label("Noch keine Sender vorhanden.\nImportiere eine M3U-Datei oder HTTPS-Playlist.", 13f, muted))
             return
@@ -548,6 +564,22 @@ class MainActivity : Activity() {
                 isClickable = true
                 setBackgroundColor(if (index % 2 == 0) Color.rgb(29, 37, 51) else panel)
                 setOnClickListener { playChannel(channel) }
+                setOnLongClickListener {
+                    val favorites = (prefs.getStringSet("favorite_urls", emptySet()) ?: emptySet()).toMutableSet()
+                    val added = if (favorites.contains(channel.url)) {
+                        favorites.remove(channel.url)
+                        false
+                    } else {
+                        favorites.add(channel.url)
+                        true
+                    }
+                    prefs.edit().putStringSet("favorite_urls", favorites).apply()
+                    Toast.makeText(this@MainActivity,
+                        if (added) "Zu Favoriten hinzugefügt" else "Aus Favoriten entfernt",
+                        Toast.LENGTH_SHORT).show()
+                    renderChannels()
+                    true
+                }
             }
             channelList.addView(item, match(58).apply { bottomMargin = dp(4) })
         }
