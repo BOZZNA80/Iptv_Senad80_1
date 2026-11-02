@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import android.graphics.Color
 import android.view.Gravity
 import android.view.View
@@ -21,6 +24,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
 import java.util.concurrent.Executors
 
 private data class TvChannel(
@@ -35,6 +43,9 @@ class MainActivity : Activity() {
     private var player: ExoPlayer? = null
     private lateinit var playerView: PlayerView
     private lateinit var playlistUrlInput: EditText
+    private lateinit var xtreamServerInput: EditText
+    private lateinit var xtreamUserInput: EditText
+    private lateinit var xtreamPasswordInput: EditText
     private lateinit var statusText: TextView
     private lateinit var channelList: LinearLayout
     private lateinit var groupButton: Button
@@ -123,7 +134,30 @@ class MainActivity : Activity() {
         }
         importRow.addView(urlButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(6) })
         importRow.addView(fileButton, LinearLayout.LayoutParams(0, dp(48), 1f))
+
         content.addView(importRow, match(56))
+        content.addView(label("XTREAM-CODES-ANBIETER", 12f, muted, true), match(30))
+        val xtreamForm = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(panel)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        xtreamServerInput = credentialInput("Server-URL (HTTPS), z. B. https://anbieter.de:8080")
+        xtreamUserInput = credentialInput("Benutzername")
+        xtreamPasswordInput = credentialInput("Passwort", true)
+        xtreamForm.addView(xtreamServerInput, match(44))
+        xtreamForm.addView(xtreamUserInput, match(44))
+        xtreamForm.addView(xtreamPasswordInput, match(44))
+        val xtreamButton = Button(this).apply {
+            text = "XTREAM-ANBIETER VERBINDEN"
+            isAllCaps = false
+            setOnClickListener {
+                connectXtream(xtreamServerInput.text.toString().trim(),
+                    xtreamUserInput.text.toString().trim(), xtreamPasswordInput.text.toString())
+            }
+        }
+        xtreamForm.addView(xtreamButton, match(46))
+        content.addView(xtreamForm, matchWrap())
 
         val body = LinearLayout(this).apply {
             orientation = if (wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
@@ -200,6 +234,118 @@ class MainActivity : Activity() {
             setOnClickListener { Toast.makeText(this@MainActivity, "$title – folgt in einem späteren Ausbauschritt", Toast.LENGTH_SHORT).show() }
         }
         parent.addView(button, match(50).apply { bottomMargin = dp(4) })
+    }
+
+
+    private fun credentialInput(hintText: String, password: Boolean = false) = EditText(this).apply {
+        hint = hintText
+        setHintTextColor(muted)
+        setTextColor(Color.WHITE)
+        textSize = 13f
+        singleLine = true
+        setPadding(dp(10), 0, dp(10), 0)
+        setBackgroundColor(bg)
+        if (password) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+    }
+
+    private fun connectXtream(serverInput: String, username: String, password: String) {
+        val server = serverInput.trimEnd('/')
+        val parsed = runCatching { URL(server) }.getOrNull()
+        if (parsed == null || parsed.protocol != "https" || parsed.host.isBlank() || username.isBlank() || password.isBlank()) {
+            showError("Bitte gültige HTTPS-Serveradresse, Benutzername und Passwort eingeben.")
+            return
+        }
+        statusText.text = "Xtream-Anbieter wird geprüft …"
+        io.execute {
+            try {
+                val base = "\$server/player_api.php?username=\${enc(username)}&password=\${enc(password)}"
+                val account = requestJson(base)
+                val userInfo = account.optJSONObject("user_info") ?: throw IllegalStateException("Ungültige Xtream-API-Antwort")
+                if (userInfo.optInt("auth", 0) != 1) throw IllegalStateException("Anmeldung abgelehnt – Zugangsdaten prüfen")
+                val categories = requestJson("\$base&action=get_live_categories").optJSONArray("categories") ?: JSONArray()
+                val streams = requestJson("\$base&action=get_live_streams")
+                val imported = mutableListOf<TvChannel>()
+                for (i in 0 until streams.length()) {
+                    val item = streams.optJSONObject(i) ?: continue
+                    val id = item.optString("stream_id")
+                    if (id.isBlank() || id == "null") continue
+                    val catId = item.optString("category_id")
+                    var group = "Weitere"
+                    for (j in 0 until categories.length()) {
+                        val cat = categories.optJSONObject(j) ?: continue
+                        if (cat.optString("category_id") == catId) { group = cat.optString("category_name", "Weitere"); break }
+                    }
+                    val name = item.optString("name").ifBlank { "Sender \$id" }
+                    val logo = item.optString("stream_icon").takeUnless { it == "null" }.orEmpty()
+                    val streamUrl = "\$server/live/\${encPath(username)}/\${encPath(password)}/\$id.ts"
+                    imported.add(TvChannel(name, streamUrl, group, logo, item.optString("epg_channel_id")))
+                }
+                if (imported.isEmpty()) throw IllegalStateException("Keine Live-TV-Sender vom Anbieter erhalten")
+                val encrypted = encryptPassword(password)
+                val profiles = JSONArray(prefs.getString("xtream_profiles", "[]"))
+                val profile = JSONObject().put("name", parsed.host).put("server", server)
+                    .put("username", username).put("encrypted_password", encrypted)
+                var replaced = false
+                for (i in 0 until profiles.length()) {
+                    val old = profiles.optJSONObject(i) ?: continue
+                    if (old.optString("server") == server && old.optString("username") == username) {
+                        profiles.put(i, profile); replaced = true; break
+                    }
+                }
+                if (!replaced) profiles.put(profile)
+                prefs.edit().putString("xtream_profiles", profiles.toString()).apply()
+                runOnUiThread {
+                    channels.clear()
+                    channels.addAll(imported)
+                    groups = listOf("Alle") + channels.map { it.group }.distinct().sorted()
+                    selectedGroup = "Alle"
+                    groupButton.text = "Gruppe: Alle"
+                    renderChannels()
+                    xtreamPasswordInput.text.clear()
+                    statusText.text = "Xtream verbunden – \${channels.size} Live-Sender · Anbieter verschlüsselt gespeichert"
+                    Toast.makeText(this, "\${channels.size} Sender geladen", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread { showError("Xtream-Verbindung fehlgeschlagen: \${e.message ?: "Unbekannter Fehler"}") }
+            }
+        }
+    }
+
+    private fun requestJson(address: String): JSONObject {
+        val connection = (URL(address).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15000
+            readTimeout = 20000
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", "IPTV_Senad/1.0")
+        }
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) throw IllegalStateException("HTTP \$code")
+            return JSONObject(body)
+        } finally { connection.disconnect() }
+    }
+
+    private fun enc(value: String) = URLEncoder.encode(value, "UTF-8")
+    private fun encPath(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
+    private fun encryptPassword(value: String): String {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val alias = "IPTV_Senad_Xtream_Key"
+        val key = if (store.containsAlias(alias)) store.getKey(alias, null) as SecretKey else {
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            generator.init(KeyGenParameterSpec.Builder(alias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true).build())
+            generator.generateKey()
+        }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        return Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
     }
 
     private fun openPlaylistFile() {
