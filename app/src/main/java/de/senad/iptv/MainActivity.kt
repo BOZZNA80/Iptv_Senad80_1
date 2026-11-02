@@ -292,7 +292,7 @@ class MainActivity : Activity() {
                 val userInfo = account.optJSONObject("user_info") ?: throw IllegalStateException("Ungültige Xtream-API-Antwort")
                 if (userInfo.optInt("auth", 0) != 1) throw IllegalStateException("Anmeldung abgelehnt – Zugangsdaten prüfen")
                 val categories = requestJson("$base&action=get_live_categories").optJSONArray("categories") ?: JSONArray()
-                val streams = requestJson("$base&action=get_live_streams")
+                val streams = requestJsonArray("$base&action=get_live_streams")
                 val imported = mutableListOf<TvChannel>()
                 for (i in 0 until streams.length()) {
                     val item = streams.optJSONObject(i) ?: continue
@@ -407,6 +407,23 @@ class MainActivity : Activity() {
             row.addView(delete, LinearLayout.LayoutParams(dp(90), dp(48)))
             providerList.addView(row, matchWrap().apply { bottomMargin = dp(4) })
         }
+    }
+
+
+    private fun requestJsonArray(address: String): JSONArray {
+        val connection = (URL(address).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15000
+            readTimeout = 20000
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", "IPTV_Senad/1.0")
+        }
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) throw IllegalStateException("HTTP $code")
+            return JSONArray(body)
+        } finally { connection.disconnect() }
     }
 
     private fun requestJson(address: String): JSONObject {
