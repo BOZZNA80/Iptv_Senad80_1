@@ -116,7 +116,7 @@ class MainActivity : Activity() {
             setHintTextColor(muted)
             setTextColor(Color.WHITE)
             textSize = 14f
-            singleLine = true
+            setSingleLine(true)
             setPadding(dp(12), 0, dp(12), 0)
             setBackgroundColor(panel)
             isFocusable = true
@@ -196,7 +196,7 @@ class MainActivity : Activity() {
         channelsPanel.addView(favoritesButton, match(42))
         val scroll = ScrollView(this).apply { isFillViewport = true }
         channelList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        scroll.addView(channelList, ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        scroll.addView(channelList, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         channelsPanel.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         statusText = label("Bereit – importiere deine eigene M3U-Playlist", 12f, muted)
         channelsPanel.addView(statusText, matchWrap().apply { topMargin = dp(8) })
@@ -271,7 +271,7 @@ class MainActivity : Activity() {
         setHintTextColor(muted)
         setTextColor(Color.WHITE)
         textSize = 13f
-        singleLine = true
+        setSingleLine(true)
         setPadding(dp(10), 0, dp(10), 0)
         setBackgroundColor(bg)
         if (password) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
