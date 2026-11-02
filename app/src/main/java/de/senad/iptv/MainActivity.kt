@@ -46,6 +46,7 @@ class MainActivity : Activity() {
     private lateinit var xtreamServerInput: EditText
     private lateinit var xtreamUserInput: EditText
     private lateinit var xtreamPasswordInput: EditText
+    private lateinit var providerList: LinearLayout
     private lateinit var statusText: TextView
     private lateinit var channelList: LinearLayout
     private lateinit var groupButton: Button
@@ -158,6 +159,10 @@ class MainActivity : Activity() {
         }
         xtreamForm.addView(xtreamButton, match(46))
         content.addView(xtreamForm, matchWrap())
+        content.addView(label("GESPEICHERTE ANBIETER", 12f, muted, true), match(30))
+        providerList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(providerList, matchWrap())
+        refreshProviderList()
 
         val body = LinearLayout(this).apply {
             orientation = if (wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
@@ -258,12 +263,12 @@ class MainActivity : Activity() {
         statusText.text = "Xtream-Anbieter wird geprüft …"
         io.execute {
             try {
-                val base = "\$server/player_api.php?username=\${enc(username)}&password=\${enc(password)}"
+                val base = "$server/player_api.php?username=${enc(username)}&password=${enc(password)}"
                 val account = requestJson(base)
                 val userInfo = account.optJSONObject("user_info") ?: throw IllegalStateException("Ungültige Xtream-API-Antwort")
                 if (userInfo.optInt("auth", 0) != 1) throw IllegalStateException("Anmeldung abgelehnt – Zugangsdaten prüfen")
-                val categories = requestJson("\$base&action=get_live_categories").optJSONArray("categories") ?: JSONArray()
-                val streams = requestJson("\$base&action=get_live_streams")
+                val categories = requestJson("$base&action=get_live_categories").optJSONArray("categories") ?: JSONArray()
+                val streams = requestJson("$base&action=get_live_streams")
                 val imported = mutableListOf<TvChannel>()
                 for (i in 0 until streams.length()) {
                     val item = streams.optJSONObject(i) ?: continue
@@ -275,9 +280,9 @@ class MainActivity : Activity() {
                         val cat = categories.optJSONObject(j) ?: continue
                         if (cat.optString("category_id") == catId) { group = cat.optString("category_name", "Weitere"); break }
                     }
-                    val name = item.optString("name").ifBlank { "Sender \$id" }
+                    val name = item.optString("name").ifBlank { "Sender $id" }
                     val logo = item.optString("stream_icon").takeUnless { it == "null" }.orEmpty()
-                    val streamUrl = "\$server/live/\${encPath(username)}/\${encPath(password)}/\$id.ts"
+                    val streamUrl = "$server/live/${encPath(username)}/${encPath(password)}/$id.ts"
                     imported.add(TvChannel(name, streamUrl, group, logo, item.optString("epg_channel_id")))
                 }
                 if (imported.isEmpty()) throw IllegalStateException("Keine Live-TV-Sender vom Anbieter erhalten")
@@ -302,12 +307,78 @@ class MainActivity : Activity() {
                     groupButton.text = "Gruppe: Alle"
                     renderChannels()
                     xtreamPasswordInput.text.clear()
-                    statusText.text = "Xtream verbunden – \${channels.size} Live-Sender · Anbieter verschlüsselt gespeichert"
-                    Toast.makeText(this, "\${channels.size} Sender geladen", Toast.LENGTH_LONG).show()
+                    statusText.text = "Xtream verbunden – ${channels.size} Live-Sender · Anbieter verschlüsselt gespeichert"
+                    refreshProviderList()
+                    Toast.makeText(this, "${channels.size} Sender geladen", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
-                runOnUiThread { showError("Xtream-Verbindung fehlgeschlagen: \${e.message ?: "Unbekannter Fehler"}") }
+                runOnUiThread { showError("Xtream-Verbindung fehlgeschlagen: ${e.message ?: "Unbekannter Fehler"}") }
             }
+        }
+    }
+
+
+    private fun decryptPassword(encoded: String): String {
+        val packed = Base64.decode(encoded, Base64.NO_WRAP)
+        if (packed.size <= 12) throw IllegalStateException("Gespeichertes Anbieterprofil ist beschädigt")
+        val iv = packed.copyOfRange(0, 12)
+        val ciphertext = packed.copyOfRange(12, packed.size)
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val key = store.getKey("IPTV_Senad_Xtream_Key", null) as? SecretKey
+            ?: throw IllegalStateException("Verschlüsselungsschlüssel nicht gefunden – Anbieter bitte neu anmelden")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key, javax.crypto.spec.GCMParameterSpec(128, iv))
+        return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+    }
+
+    private fun refreshProviderList() {
+        if (!::providerList.isInitialized) return
+        providerList.removeAllViews()
+        val profiles = JSONArray(prefs.getString("xtream_profiles", "[]"))
+        if (profiles.length() == 0) {
+            providerList.addView(label("Noch kein Anbieter gespeichert.", 12f, muted), match(38))
+            return
+        }
+        for (i in 0 until profiles.length()) {
+            val profile = profiles.optJSONObject(i) ?: continue
+            val server = profile.optString("server")
+            val username = profile.optString("username")
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setBackgroundColor(panel)
+                setPadding(dp(6), 0, dp(6), 0)
+            }
+            val use = Button(this).apply {
+                text = "\${profile.optString("name")} · $username"
+                isAllCaps = false
+                textSize = 11f
+                setOnClickListener {
+                    try {
+                        val password = decryptPassword(profile.optString("encrypted_password"))
+                        connectXtream(server, username, password)
+                    } catch (e: Exception) {
+                        showError("Anbieter konnte nicht geladen werden: \${e.message}")
+                    }
+                }
+            }
+            val delete = Button(this).apply {
+                text = "Löschen"
+                isAllCaps = false
+                textSize = 10f
+                setOnClickListener {
+                    val updated = JSONArray()
+                    for (j in 0 until profiles.length()) {
+                        if (j != i) profiles.optJSONObject(j)?.let { updated.put(it) }
+                    }
+                    prefs.edit().putString("xtream_profiles", updated.toString()).apply()
+                    refreshProviderList()
+                    Toast.makeText(this@MainActivity, "Anbieterprofil gelöscht", Toast.LENGTH_SHORT).show()
+                }
+            }
+            row.addView(use, LinearLayout.LayoutParams(0, dp(48), 1f))
+            row.addView(delete, LinearLayout.LayoutParams(dp(90), dp(48)))
+            providerList.addView(row, matchWrap().apply { bottomMargin = dp(4) })
         }
     }
 
@@ -322,7 +393,7 @@ class MainActivity : Activity() {
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) throw IllegalStateException("HTTP \$code")
+            if (code !in 200..299) throw IllegalStateException("HTTP $code")
             return JSONObject(body)
         } finally { connection.disconnect() }
     }
